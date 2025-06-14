@@ -1,0 +1,132 @@
+from scapy.all import IP, TCP, sr1
+import socket
+import threading
+from queue import Queue
+
+# Lock for thread-safe output
+print_lock = threading.Lock()
+
+def syn_scan(ip, port):
+    pkt = IP(dst=ip)/TCP(dport=port, flags="S")
+    response = sr1(pkt, timeout=1, verbose=0)
+
+    if response and response.haslayer(TCP):
+        if response.getlayer(TCP).flags == 0x12:  # SYN-ACK
+            with print_lock:
+                banner = banner_grab(ip, port)
+                print(f"[+] Port {port} is OPEN - Banner: {banner}")
+            return
+    # else:
+    #     print(f"[-] Port {port} is closed or filtered")
+
+def banner_grab(ip, port):
+    try:
+        with socket.socket() as s:
+            s.settimeout(1)
+            s.connect((ip, port))
+            return s.recv(1024).decode(errors="ignore").strip()
+    except:
+        return "No banner"
+
+def threader(ip, queue):
+    while True:
+        port = queue.get()
+        syn_scan(ip, port)
+        queue.task_done()
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Scapy SYN Scanner with Banner Grabbing")
+    parser.add_argument("host", help="Target IP or domain")
+    parser.add_argument("-p1", "--start-port", type=int, default=1, help="Start port")
+    parser.add_argument("-p2", "--end-port", type=int, default=1024, help="End port")
+    parser.add_argument("-t", "--threads", type=int, default=100, help="Number of threads")
+
+    args = parser.parse_args()
+    target_ip = socket.gethostbyname(args.host)
+
+    print(f"[*] Starting SYN scan on {args.host} ({target_ip}) from port {args.start_port} to {args.end_port}")
+
+    queue = Queue()
+
+    for _ in range(args.threads):
+        t = threading.Thread(target=threader, args=(target_ip, queue), daemon=True)
+        t.start()
+
+    for port in range(args.start_port, args.end_port + 1):
+        queue.put(port)
+
+    queue.join()
+    print("\n[*] Scan complete.")
+
+if __name__ == "__main__":
+    main()
+
+    import argparse
+    import csv
+    import json
+
+    parser = argparse.ArgumentParser(description="Scapy SYN Scanner with Banner Grabbing + Export")
+    parser.add_argument("host", help="Target IP or domain")
+    parser.add_argument("-p1", "--start-port", type=int, default=1, help="Start port")
+    parser.add_argument("-p2", "--end-port", type=int, default=1024, help="End port")
+    parser.add_argument("-t", "--threads", type=int, default=100, help="Number of threads")
+
+    args = parser.parse_args()
+    target_ip = socket.gethostbyname(args.host)
+
+    print(f"[*] Starting SYN scan on {args.host} ({target_ip}) from port {args.start_port} to {args.end_port}")
+
+    queue = Queue()
+    results = []  # Store results here
+
+    def threader(ip, queue):
+        while True:
+            port = queue.get()
+            pkt = IP(dst=ip)/TCP(dport=port, flags="S")
+            response = sr1(pkt, timeout=1, verbose=0)
+
+            if response and response.haslayer(TCP):
+                if response.getlayer(TCP).flags == 0x12:  # SYN-ACK
+                    banner = banner_grab(ip, port)
+                    with print_lock:
+                        print(f"[+] Port {port} is OPEN - Banner: {banner}")
+                        results.append({
+                            "port": port,
+                            "banner": banner
+                        })
+            queue.task_done()
+
+    # Launch threads
+    for _ in range(args.threads):
+        t = threading.Thread(target=threader, args=(target_ip, queue), daemon=True)
+        t.start()
+
+    # Fill the queue
+    for port in range(args.start_port, args.end_port + 1):
+        queue.put(port)
+
+    queue.join()
+    print("\n[*] Scan complete. Saving results...")
+
+    import os  # Move this to the top with other imports, or leave it here
+    
+    # Export to CSV
+    with open("scan_results.csv", "w", newline="") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=["port", "banner"])
+        writer.writeheader()
+        for entry in results:
+            writer.writerow(entry)
+
+    # Export to JSON
+    with open("scan_results.json", "w") as jsonfile:
+        json.dump(results, jsonfile, indent=2)
+
+    # Print file paths
+    print(f"[+] Results saved to:\n  {os.path.abspath('scan_results.csv')}\n  {os.path.abspath('scan_results.json')}")
+
+    # This should be at the very bottom of the file
+    if __name__ == "__main__":
+        main()
+
